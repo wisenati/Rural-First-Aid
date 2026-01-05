@@ -1,0 +1,9 @@
+{
+  "name": "RuralHealth Connect",
+  "description": "A smart first aid and emergency assistant designed specifically for rural communities, featuring offline-ready guides, SOS emergency alerts, AI-driven symptom checking, and local health directory.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}

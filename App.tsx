@@ -1,500 +1,963 @@
 
-import React, { useState, useEffect, useRef } from 'react';
-import { UserProfile, UserRole, Language, EmergencyGuide, InteractiveStep } from './types';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { 
+  Plus, 
+  Search, 
+  Phone, 
+  ChevronLeft, 
+  Volume2, 
+  Stethoscope, 
+  MapPin, 
+  Users, 
+  Bandage, 
+  Activity, 
+  Camera, 
+  Mic, 
+  LogOut, 
+  Trash2, 
+  Edit2, 
+  ArrowUp, 
+  ArrowDown, 
+  X,
+  AlertTriangle,
+  Lightbulb,
+  Shield
+} from 'lucide-react';
+import { UserProfile, UserRole, Language, EmergencyGuide, InteractiveStep, HealthFacility, EmergencyContact } from './types';
 import { EMERGENCY_GUIDES, HEALTH_DIRECTORY, MOCK_BROADCASTS } from './constants';
 import Layout from './components/Layout';
 import SOSButton from './components/SOSButton';
 import AuthScreen from './views/AuthScreen';
 import { GeminiService } from './services/geminiService';
+import PrivacyPolicy from './components/PrivacyPolicy';
 
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [activeTab, setActiveTab] = useState('home');
   const [selectedGuide, setSelectedGuide] = useState<EmergencyGuide | null>(null);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
-  const [showFeedback, setShowFeedback] = useState(false);
   const [symptomText, setSymptomText] = useState('');
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [checkerResult, setCheckerResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
-  const [showCamera, setShowCamera] = useState(false);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [currentTipIndex, setCurrentTipIndex] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentTipIndex((prevIndex) => (prevIndex + 1) % MOCK_BROADCASTS.length);
+    }, 60000); // 1 minute
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
   
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Profile & Directory State
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [editData, setEditData] = useState<Partial<UserProfile>>({});
+  const [directoryCategory, setDirectoryCategory] = useState('All');
+  const [directorySearch, setDirectorySearch] = useState('');
+  const [selectedPatientProfile, setSelectedPatientProfile] = useState<UserProfile | null>(null);
+  
+  // Custom Guides State
+  const [customGuides, setCustomGuides] = useState<EmergencyGuide[]>([]);
+  const [isEditingGuide, setIsEditingGuide] = useState(false);
+  const [guideToEdit, setGuideToEdit] = useState<EmergencyGuide | null>(null);
+  const [guideSearch, setGuideSearch] = useState('');
+  const [guideCategory, setGuideCategory] = useState('All');
+  
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const guideMediaInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const saved = localStorage.getItem('user_profile');
-    if (saved) setCurrentUser(JSON.parse(saved));
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (!parsed.sosContacts) parsed.sosContacts = [];
+        setCurrentUser(parsed);
+      } catch (e) {
+        console.error("Failed to load user profile", e);
+      }
+    }
+    const savedGuides = localStorage.getItem('custom_emergency_guides');
+    if (savedGuides) {
+      try {
+        setCustomGuides(JSON.parse(savedGuides));
+      } catch (e) {
+        console.error("Failed to load custom guides", e);
+      }
+    }
   }, []);
 
-  const handleLogout = () => {
-    localStorage.removeItem('user_profile');
-    setCurrentUser(null);
+  const allGuides = useMemo(() => {
+    const merged = [...EMERGENCY_GUIDES];
+    customGuides.forEach(cg => {
+      const idx = merged.findIndex(g => g.id === cg.id);
+      if (idx !== -1) {
+        merged[idx] = cg;
+      } else {
+        merged.push(cg);
+      }
+    });
+    return merged;
+  }, [customGuides]);
+
+  const filteredGuides = useMemo(() => {
+    let filtered = allGuides.filter(g => g.title.toLowerCase().includes(guideSearch.toLowerCase()));
+    if (guideCategory !== 'All') {
+      filtered = filtered.filter(g => g.category === guideCategory);
+    }
+    return filtered;
+  }, [allGuides, guideSearch, guideCategory]);
+
+  const guideCategories = useMemo(() => {
+    const cats = new Set(allGuides.map(g => g.category));
+    return ['All', ...Array.from(cats)];
+  }, [allGuides]);
+
+  const updateProfile = (updates: Partial<UserProfile>) => {
+    if (!currentUser) return;
+    const updated = { ...currentUser, ...updates };
+    if (!updated.sosContacts) updated.sosContacts = [];
+    setCurrentUser(updated);
+    localStorage.setItem('user_profile', JSON.stringify(updated));
+    
+    const allUsers = JSON.parse(localStorage.getItem('all_registered_users') || '[]');
+    const index = allUsers.findIndex((u: UserProfile) => u.id === currentUser.id);
+    if (index !== -1) {
+      allUsers[index] = updated;
+      localStorage.setItem('all_registered_users', JSON.stringify(allUsers));
+    }
+  };
+
+  const handleSaveProfile = () => {
+    updateProfile(editData);
+    setIsEditingProfile(false);
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64 = reader.result as string;
+        setEditData(prev => ({ ...prev, profilePicture: base64 }));
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const dynamicDirectoryItems = useMemo(() => {
+    const allRegistered = JSON.parse(localStorage.getItem('all_registered_users') || '[]');
+    
+    if (currentUser?.role === UserRole.PATIENT) {
+      const helpers: HealthFacility[] = allRegistered
+        .filter((u: UserProfile) => u.showInHelp && u.id !== currentUser?.id && (u.role === UserRole.ORGANIZATION || u.role === UserRole.CAREGIVER))
+        .map((u: UserProfile) => ({
+          id: u.id,
+          name: u.role === UserRole.ORGANIZATION ? (u.organizationName || 'Unnamed Org') : u.fullName,
+          type: u.role === UserRole.ORGANIZATION ? (u.firmType === 'Others' ? (u.otherFirmType as any || 'Organization') : u.firmType) : 'Volunteer',
+          distance: 'Community Helper',
+          phone: u.phone,
+          address: u.address,
+          profilePicture: u.profilePicture
+        }));
+      return [...HEALTH_DIRECTORY, ...helpers];
+    } else {
+      return allRegistered.filter((u: UserProfile) => u.role === UserRole.PATIENT && u.showInHelp);
+    }
+  }, [currentUser]);
+
+  const filteredDirectory = useMemo(() => {
+    const searchStr = directorySearch.toLowerCase();
+    const items = dynamicDirectoryItems.filter(item => {
+      const name = (item as any).fullName || (item as any).name || (item as any).organizationName || "";
+      return name.toLowerCase().includes(searchStr);
+    });
+
+    if (currentUser?.role !== UserRole.PATIENT) return items;
+    
+    if (directoryCategory === 'All') return items;
+    return items.filter((item: any) => {
+      const type = item.type?.toLowerCase() || "";
+      const cat = directoryCategory.toLowerCase();
+      if (cat === 'volunteers') return type === 'volunteer' || type === 'caregiver' || type === 'provider';
+      return type.includes(cat.slice(0, -1)) || type.includes(cat);
+    });
+  }, [dynamicDirectoryItems, directoryCategory, directorySearch, currentUser]);
+
+  const speakGuide = async (guide: EmergencyGuide, step: InteractiveStep) => {
+    try { 
+      let text = `${guide.title}. Step: ${step.text}`;
+      if (step.actionRequired) text += `. Action required: ${step.actionRequired}`;
+      await GeminiService.speakText(text); 
+    } catch (e) {}
+  };
+
+  const checkSymptoms = async () => {
+    if (!symptomText.trim() && !capturedImage) return alert("Please describe symptoms or provide an image.");
+    setLoading(true);
+    try {
+      const result = await GeminiService.checkSymptoms(symptomText, capturedImage || undefined);
+      setCheckerResult(result);
+    } catch (e) { alert("Analysis failed."); } finally { setLoading(false); }
   };
 
   const startVoiceInput = () => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      alert("Speech recognition is not supported in your browser.");
+      alert("Voice input is not supported in your browser.");
       return;
     }
 
     const recognition = new SpeechRecognition();
-    recognition.lang = currentUser?.preferredLanguage || 'en-US';
-    recognition.continuous = false;
+    recognition.lang = 'en-US';
     recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
 
     recognition.onstart = () => setIsListening(true);
     recognition.onend = () => setIsListening(false);
     recognition.onerror = () => setIsListening(false);
-    
     recognition.onresult = (event: any) => {
       const transcript = event.results[0][0].transcript;
-      setSymptomText(prev => prev + (prev ? ' ' : '') + transcript);
+      setSymptomText(prev => prev ? prev + " " + transcript : transcript);
     };
 
     recognition.start();
   };
 
-  const openCamera = async () => {
-    setShowCamera(true);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
-    } catch (err) {
-      alert("Could not access camera.");
-      setShowCamera(false);
+  const handleSymptomImage = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setCapturedImage(reader.result as string);
+      };
+      reader.readAsDataURL(file);
     }
   };
 
-  const capturePhoto = () => {
-    if (videoRef.current && canvasRef.current) {
-      const context = canvasRef.current.getContext('2d');
-      canvasRef.current.width = videoRef.current.videoWidth;
-      canvasRef.current.height = videoRef.current.videoHeight;
-      context?.drawImage(videoRef.current, 0, 0);
-      const dataUrl = canvasRef.current.toDataURL('image/jpeg');
-      setCapturedImage(dataUrl);
-      closeCamera();
-    }
+  const handleLogout = () => {
+    setCurrentUser(null);
+    localStorage.removeItem('user_profile');
+    setActiveTab('home');
   };
 
-  const closeCamera = () => {
-    if (videoRef.current && videoRef.current.srcObject) {
-      const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
-      tracks.forEach(track => track.stop());
-    }
-    setShowCamera(false);
+  const handleDeleteAccount = () => {
+    localStorage.removeItem('user_profile');
+    localStorage.removeItem('custom_emergency_guides');
+    // Also remove from all_registered_users if exists
+    const allUsers = JSON.parse(localStorage.getItem('all_registered_users') || '[]');
+    const updatedUsers = allUsers.filter((u: UserProfile) => u.id !== currentUser?.id);
+    localStorage.setItem('all_registered_users', JSON.stringify(updatedUsers));
+    
+    setCurrentUser(null);
+    setActiveTab('home');
+    alert("Your account and all associated data have been permanently deleted.");
   };
 
-  const checkSymptoms = async () => {
-    if (!symptomText && !capturedImage) return;
-    setLoading(true);
-    try {
-      const result = await GeminiService.checkSymptoms(symptomText || "Analyzing image provided.", capturedImage || undefined);
-      setCheckerResult(result);
-    } catch (e) {
-      alert("Error analyzing input. Please try again.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const speakGuide = (guide: EmergencyGuide, step?: InteractiveStep) => {
-    const text = step ? step.text : `${guide.title}. Instructions follow.`;
-    GeminiService.speakText(text);
-  };
-
-  const handleNextStep = () => {
-    if (selectedGuide && currentStepIndex < selectedGuide.steps.length - 1) {
-      setShowFeedback(true);
-      setTimeout(() => {
-        setCurrentStepIndex(currentStepIndex + 1);
-        setShowFeedback(false);
-        speakGuide(selectedGuide, selectedGuide.steps[currentStepIndex + 1]);
-      }, 1500);
+  const saveCustomGuide = (guide: EmergencyGuide) => {
+    const updated = [...customGuides];
+    const idx = updated.findIndex(g => g.id === guide.id);
+    if (idx !== -1) {
+      updated[idx] = guide;
     } else {
-      setCurrentStepIndex(selectedGuide?.steps.length || 0);
+      updated.push(guide);
     }
+    setCustomGuides(updated);
+    localStorage.setItem('custom_emergency_guides', JSON.stringify(updated));
+    setIsEditingGuide(false);
+    setGuideToEdit(null);
   };
 
-  if (!currentUser) {
-    return <AuthScreen onLogin={(user) => {
-      setCurrentUser(user);
-      localStorage.setItem('user_profile', JSON.stringify(user));
-    }} />;
-  }
+  const deleteCustomGuide = (id: string) => {
+    if (!window.confirm("Are you sure you want to delete this guide?")) return;
+    const updated = customGuides.filter(g => g.id !== id);
+    setCustomGuides(updated);
+    localStorage.setItem('custom_emergency_guides', JSON.stringify(updated));
+    if (selectedGuide?.id === id) setSelectedGuide(null);
+  };
+
+  if (!currentUser) return <AuthScreen onLogin={setCurrentUser} />;
 
   return (
     <Layout 
-      title={activeTab === 'guides' && selectedGuide ? selectedGuide.title : activeTab.charAt(0).toUpperCase() + activeTab.slice(1)} 
+      title={activeTab === 'guides' && selectedGuide ? selectedGuide.title : activeTab === 'contacts' ? 'My Contacts' : activeTab.charAt(0).toUpperCase() + activeTab.slice(1)} 
       activeTab={activeTab} 
-      setActiveTab={(tab) => {
-        setActiveTab(tab);
-        setSelectedGuide(null);
-        setCurrentStepIndex(0);
+      setActiveTab={(tab) => { 
+        setActiveTab(tab); 
+        setSelectedGuide(null); 
+        setIsEditingProfile(false); 
+        setSelectedPatientProfile(null);
       }}
-      onBack={selectedGuide ? () => {
-        if (currentStepIndex > 0) {
-          setCurrentStepIndex(currentStepIndex - 1);
-        } else {
-          setSelectedGuide(null);
-        }
-      } : undefined}
+      onBack={selectedGuide ? () => setSelectedGuide(null) : isEditingProfile ? () => setIsEditingProfile(false) : selectedPatientProfile ? () => setSelectedPatientProfile(null) : undefined}
     >
-      {/* Home View */}
+      {!isOnline && (
+        <div className="mb-4 p-3 bg-orange-100 border border-orange-200 rounded-2xl flex items-center gap-3 animate-fadeIn">
+          <span className="text-xl">📡</span>
+          <div>
+            <p className="text-xs font-black text-orange-900 uppercase tracking-widest">Offline Mode</p>
+            <p className="text-[10px] text-orange-700 font-medium">You are currently offline. First aid guides are still available.</p>
+          </div>
+        </div>
+      )}
       {activeTab === 'home' && (
         <div className="space-y-6 animate-fadeIn">
           <div className="flex justify-between items-center">
             <div>
-              <h2 className="text-2xl font-bold">Hello, {currentUser.fullName.split(' ')[0]} 👋</h2>
-              <p className="text-gray-500">How can we help today?</p>
+              <h2 className="text-2xl font-black text-gray-800">Hi, {currentUser.fullName.split(' ')[0]}</h2>
+              <p className="text-gray-400 text-sm font-medium">Safe & Smart Help</p>
             </div>
-            <button onClick={() => setActiveTab('profile')} className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center text-red-600 text-xl font-bold">
-              {currentUser.fullName.charAt(0)}
+            <button onClick={() => setActiveTab('profile')} className="w-14 h-14 bg-red-600 rounded-full flex items-center justify-center text-white text-xl font-black shadow-lg overflow-hidden border-2 border-white">
+              {currentUser.profilePicture ? <img src={currentUser.profilePicture} className="w-full h-full object-cover" /> : currentUser.fullName.charAt(0)}
             </button>
           </div>
 
-          <SOSButton />
+          <div className="relative h-48 rounded-[40px] overflow-hidden shadow-xl">
+            <img 
+              src="https://images.unsplash.com/photo-1576091160550-2173dba999ef?auto=format&fit=crop&q=80&w=800" 
+              className="w-full h-full object-cover" 
+              alt="Healthcare Hero"
+              referrerPolicy="no-referrer"
+            />
+            <div className="absolute inset-0 bg-gradient-to-r from-red-600/80 to-transparent flex flex-col justify-center p-8">
+              <h3 className="text-white text-xl font-black leading-tight mb-2">Always Ready<br/>To Help You</h3>
+              <p className="text-white/80 text-[10px] font-bold uppercase tracking-widest">Community Support Network</p>
+            </div>
+          </div>
 
+          <SOSButton user={currentUser} onUpdateContacts={(contacts) => updateProfile({ sosContacts: contacts })} />
           <div className="grid grid-cols-2 gap-4">
-            <button onClick={() => setActiveTab('guides')} className="bg-blue-50 p-6 rounded-3xl border border-blue-100 flex flex-col items-center hover:shadow-md transition-all">
-              <span className="text-3xl mb-2">🩹</span>
-              <span className="font-bold text-blue-900">First Aid</span>
-            </button>
-            <button onClick={() => setActiveTab('directory')} className="bg-green-50 p-6 rounded-3xl border border-green-100 flex flex-col items-center hover:shadow-md transition-all">
-              <span className="text-3xl mb-2">🏥</span>
-              <span className="font-bold text-green-900">Find Clinic</span>
-            </button>
+            <QuickAction icon={<Bandage size={32} />} label="First Aid" bg="bg-blue-50" color="text-blue-900" onClick={() => setActiveTab('guides')} />
+            <QuickAction icon={<Stethoscope size={32} />} label="AI Symptoms" bg="bg-purple-50" color="text-purple-900" onClick={() => setActiveTab('checker')} />
+            <QuickAction icon={<MapPin size={32} />} label="Find Help" bg="bg-green-50" color="text-green-900" onClick={() => setActiveTab('directory')} />
+            <QuickAction icon={<Users size={32} />} label="My Contacts" bg="bg-orange-50" color="text-orange-900" onClick={() => setActiveTab('contacts')} />
           </div>
-
-          <section>
-            <h3 className="font-bold text-lg mb-3 flex items-center">
-              <span className="mr-2">📢</span> Community Alerts
-            </h3>
-            <div className="space-y-3">
-              {MOCK_BROADCASTS.map(alert => (
-                <div key={alert.id} className={`p-4 rounded-2xl border ${alert.priority === 'high' ? 'bg-orange-50 border-orange-200' : 'bg-gray-50 border-gray-200'}`}>
-                  <div className="flex justify-between items-start mb-1">
-                    <h4 className="font-bold text-sm uppercase text-gray-700">{alert.title}</h4>
-                    <span className="text-[10px] text-gray-400">{alert.date}</span>
-                  </div>
-                  <p className="text-gray-600 text-sm">{alert.content}</p>
-                </div>
-              ))}
+          <section className="bg-white p-6 rounded-[32px] border-2 border-gray-50">
+            <div className="flex items-center gap-2 mb-4">
+              <Lightbulb size={16} className="text-yellow-500" />
+              <h3 className="font-black text-sm uppercase tracking-widest text-gray-400">Healthy Tip</h3>
             </div>
+            {MOCK_BROADCASTS.length > 0 && (
+              <div className="p-4 bg-yellow-50 rounded-2xl border border-yellow-100 animate-fadeIn" key={currentTipIndex}>
+                <p className="font-bold text-gray-800 text-xs">{MOCK_BROADCASTS[currentTipIndex].title}</p>
+                <p className="text-[10px] text-gray-500 mt-1">{MOCK_BROADCASTS[currentTipIndex].content}</p>
+              </div>
+            )}
           </section>
         </div>
       )}
 
-      {/* First Aid Guides View */}
-      {activeTab === 'guides' && (
-        <div className="animate-fadeIn">
-          {!selectedGuide ? (
-            <div className="grid grid-cols-2 gap-4">
-              {EMERGENCY_GUIDES.map(guide => (
+      {activeTab === 'directory' && (
+        <div className="space-y-4 animate-fadeIn">
+          <div className="relative">
+            <input 
+              type="text" 
+              placeholder={currentUser.role === UserRole.PATIENT ? "Search Health Facilities..." : "Search Community Patients..."}
+              value={directorySearch}
+              onChange={(e) => setDirectorySearch(e.target.value)}
+              className="w-full p-4 bg-gray-50 rounded-2xl border-none text-sm font-medium focus:ring-2 focus:ring-red-100 outline-none pl-12"
+            />
+            <Search className="absolute left-4 top-4 opacity-30" size={20} />
+          </div>
+
+          {currentUser.role === UserRole.PATIENT && (
+            <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide px-1">
+              {['All', 'Clinic', 'Hospital', 'Pharmacy', 'Volunteers'].map(cat => (
                 <button 
-                  key={guide.id}
-                  onClick={() => {
-                    setSelectedGuide(guide);
-                    setCurrentStepIndex(0);
-                    speakGuide(guide, guide.steps[0]);
-                  }}
-                  className="bg-white p-6 rounded-3xl border-2 border-gray-100 shadow-sm flex flex-col items-center hover:border-red-200 transition-all active:scale-95"
+                  key={cat} 
+                  onClick={() => setDirectoryCategory(cat)}
+                  className={`px-6 py-2 rounded-full text-[10px] font-black transition-all border ${directoryCategory === cat ? 'bg-red-600 text-white border-red-700' : 'bg-white text-gray-400 border-gray-100'}`}
                 >
-                  <span className="text-4xl mb-3">{guide.icon}</span>
-                  <span className="font-bold text-gray-800 text-center">{guide.title}</span>
+                  {cat}
                 </button>
               ))}
             </div>
-          ) : currentStepIndex < selectedGuide.steps.length ? (
-            <div className="space-y-6">
-              <div className="relative overflow-hidden rounded-3xl">
-                <img src={selectedGuide.image} className="w-full h-48 object-cover shadow-md" alt={selectedGuide.title} />
-                <div className="absolute top-4 left-4 bg-red-600 text-white px-3 py-1 rounded-full text-xs font-bold uppercase">
-                  Step {currentStepIndex + 1} of {selectedGuide.steps.length}
+          )}
+
+          <div className="space-y-3">
+            {selectedPatientProfile ? (
+              <div className="animate-slideUp space-y-6">
+                <div className="bg-red-50 p-6 rounded-[32px] border border-red-100 flex flex-col items-center">
+                  <div className="w-24 h-24 bg-red-600 rounded-full mb-4 flex items-center justify-center text-white text-4xl font-black overflow-hidden border-4 border-white shadow-xl">
+                    {selectedPatientProfile.profilePicture ? <img src={selectedPatientProfile.profilePicture} className="w-full h-full object-cover" /> : selectedPatientProfile.fullName.charAt(0)}
+                  </div>
+                  <h3 className="text-xl font-black text-red-900">{selectedPatientProfile.fullName}</h3>
+                  <p className="text-[10px] font-black text-red-600 uppercase tracking-[2px]">{selectedPatientProfile.gender} • Age {selectedPatientProfile.age}</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <MedicalMetric icon="🩸" label="Blood Group" value={selectedPatientProfile.bloodGroup || 'Not set'} />
+                  <MedicalMetric icon="🧬" label="Genotype" value={selectedPatientProfile.genotype || 'Not set'} />
+                </div>
+
+                <div className="bg-white p-6 rounded-[32px] border border-gray-100 shadow-sm space-y-4">
+                  <div>
+                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Health Challenges</p>
+                    <p className="text-sm font-medium text-gray-700">{selectedPatientProfile.healthChallenges || 'None reported'}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Address</p>
+                    <p className="text-sm font-medium text-gray-700">{selectedPatientProfile.address}</p>
+                  </div>
+                </div>
+
+                <div className="flex gap-4">
+                  <button onClick={() => window.open(`tel:${selectedPatientProfile.phone}`)} className="w-full py-5 bg-red-600 text-white rounded-2xl font-black shadow-lg flex items-center justify-center gap-2">
+                    <Phone size={20} />
+                    CALL PATIENT NOW
+                  </button>
                 </div>
               </div>
-              
-              <div className="flex items-center justify-between">
-                <h2 className="text-2xl font-bold text-gray-900 leading-tight">
-                  {selectedGuide.steps[currentStepIndex].text}
-                </h2>
-                <button 
-                  onClick={() => speakGuide(selectedGuide, selectedGuide.steps[currentStepIndex])}
-                  className="p-3 bg-red-100 text-red-600 rounded-full hover:bg-red-200"
-                >
-                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M9.383 3.076A1 1 0 0110 4v12a1 1 0 01-1.707.707L4.586 13H2a1 1 0 01-1-1V8a1 1 0 011-1h2.586l3.707-3.707a1 1 0 011.09-.217zM14.657 2.929a1 1 0 011.414 0A9.972 9.972 0 0119 10a9.972 9.972 0 01-2.929 7.071 1 1 0 01-1.414-1.414A7.971 7.971 0 0017 10c0-2.21-.894-4.208-2.343-5.657a1 1 0 010-1.414zm-2.829 2.828a1 1 0 011.415 0A5.983 5.983 0 0115 10a5.983 5.983 0 01-1.757 4.243 1 1 0 01-1.415-1.415A3.983 3.983 0 0013 10a3.983 3.983 0 00-1.172-2.828 1 1 0 010-1.415z" clipRule="evenodd" />
-                  </svg>
-                </button>
+            ) : filteredDirectory.map((item: any, i) => (
+              <div key={i} className="bg-white p-5 rounded-[32px] border border-gray-50 shadow-sm flex items-center gap-4 active:scale-[0.98] transition-all" onClick={() => currentUser.role !== UserRole.PATIENT ? setSelectedPatientProfile(item) : null}>
+                <div className="w-14 h-14 bg-red-50 text-red-600 rounded-2xl flex items-center justify-center text-2xl overflow-hidden font-black">
+                  {item.profilePicture ? <img src={item.profilePicture} className="w-full h-full object-cover" /> : (item.role === UserRole.PATIENT ? item.fullName.charAt(0) : '🏥')}
+                </div>
+                <div className="flex-1">
+                  <h4 className="font-black text-gray-800 text-sm">{item.fullName || item.name || item.organizationName}</h4>
+                  <p className="text-[9px] font-bold text-red-600 uppercase tracking-widest">{item.type || (item.role === UserRole.PATIENT ? `Patient • ${item.bloodGroup || 'N/A'}` : 'Responder')}</p>
+                </div>
+              </div>
+            ))}
+            {(!filteredDirectory || filteredDirectory.length === 0) && (
+              <div className="text-center py-20 opacity-30 font-black italic">No records found</div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'guides' && (
+        <div className="animate-fadeIn">
+          {isEditingGuide && guideToEdit ? (
+            <div className="space-y-6">
+              <div className="bg-white p-6 rounded-[32px] border-2 border-gray-50 shadow-sm space-y-4">
+                <h3 className="text-xl font-black text-gray-800">Edit Guide: {guideToEdit.title}</h3>
+                <div className="space-y-4">
+                  <div>
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Guide Title</label>
+                    <input 
+                      type="text" 
+                      value={guideToEdit.title} 
+                      onChange={(e) => setGuideToEdit({...guideToEdit, title: e.target.value})}
+                      className="w-full p-4 bg-gray-50 rounded-2xl border-none text-sm font-medium mt-1"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Steps</label>
+                    <div className="space-y-4 mt-2">
+                      {guideToEdit.steps.map((step, sIdx) => (
+                        <div key={sIdx} className="p-4 bg-gray-50 rounded-2xl border border-gray-100 space-y-3">
+                          <div className="flex justify-between items-center">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] font-black text-red-600 uppercase">Step {sIdx + 1}</span>
+                              <div className="flex gap-1">
+                                <button 
+                                  disabled={sIdx === 0}
+                                  onClick={() => {
+                                    const newSteps = [...guideToEdit.steps];
+                                    [newSteps[sIdx], newSteps[sIdx - 1]] = [newSteps[sIdx - 1], newSteps[sIdx]];
+                                    setGuideToEdit({...guideToEdit, steps: newSteps});
+                                  }}
+                                  className="w-5 h-5 bg-white rounded flex items-center justify-center text-[10px] disabled:opacity-30"
+                                >↑</button>
+                                <button 
+                                  disabled={sIdx === guideToEdit.steps.length - 1}
+                                  onClick={() => {
+                                    const newSteps = [...guideToEdit.steps];
+                                    [newSteps[sIdx], newSteps[sIdx + 1]] = [newSteps[sIdx + 1], newSteps[sIdx]];
+                                    setGuideToEdit({...guideToEdit, steps: newSteps});
+                                  }}
+                                  className="w-5 h-5 bg-white rounded flex items-center justify-center text-[10px] disabled:opacity-30"
+                                >↓</button>
+                              </div>
+                            </div>
+                            <button 
+                              onClick={() => {
+                                const newSteps = [...guideToEdit.steps];
+                                newSteps.splice(sIdx, 1);
+                                setGuideToEdit({...guideToEdit, steps: newSteps});
+                              }}
+                              className="text-red-600 text-[10px] font-black"
+                            >REMOVE</button>
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-[8px] font-black text-gray-400 uppercase tracking-widest">Instruction</label>
+                            <textarea 
+                              value={step.text} 
+                              onChange={(e) => {
+                                const newSteps = [...guideToEdit.steps];
+                                newSteps[sIdx].text = e.target.value;
+                                setGuideToEdit({...guideToEdit, steps: newSteps});
+                              }}
+                              placeholder="Step instruction..."
+                              className="w-full p-3 bg-white rounded-xl border-none text-xs resize-none"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-[8px] font-black text-gray-400 uppercase tracking-widest">Feedback / Encouragement</label>
+                            <input 
+                              type="text"
+                              value={step.feedback || ''} 
+                              onChange={(e) => {
+                                const newSteps = [...guideToEdit.steps];
+                                newSteps[sIdx].feedback = e.target.value;
+                                setGuideToEdit({...guideToEdit, steps: newSteps});
+                              }}
+                              placeholder="e.g. Keep going, you are doing great!"
+                              className="w-full p-3 bg-white rounded-xl border-none text-xs"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-[8px] font-black text-gray-400 uppercase tracking-widest">Action Required (Optional)</label>
+                            <input 
+                              type="text"
+                              value={step.actionRequired || ''} 
+                              onChange={(e) => {
+                                const newSteps = [...guideToEdit.steps];
+                                newSteps[sIdx].actionRequired = e.target.value;
+                                setGuideToEdit({...guideToEdit, steps: newSteps});
+                              }}
+                              placeholder="e.g. Press firmly on the wound"
+                              className="w-full p-3 bg-white rounded-xl border-none text-xs"
+                            />
+                          </div>
+                          <div className="flex gap-2">
+                            <button 
+                              onClick={() => {
+                                const input = document.createElement('input');
+                                input.type = 'file';
+                                input.accept = 'image/*,video/*';
+                                input.onchange = (e) => {
+                                  const file = (e.target as HTMLInputElement).files?.[0];
+                                  if (file) {
+                                    if (file.size > 2 * 1024 * 1024) {
+                                      alert("File is too large (max 2MB for local storage). Consider using smaller files or videos.");
+                                      return;
+                                    }
+                                    const reader = new FileReader();
+                                    reader.onloadend = () => {
+                                      const newSteps = [...guideToEdit.steps];
+                                      newSteps[sIdx].mediaUrl = reader.result as string;
+                                      newSteps[sIdx].mediaType = file.type.startsWith('video') ? 'video' : 'image';
+                                      setGuideToEdit({...guideToEdit, steps: newSteps});
+                                    };
+                                    reader.readAsDataURL(file);
+                                  }
+                                };
+                                input.click();
+                              }}
+                              className="flex-1 py-2 bg-blue-50 text-blue-600 rounded-xl text-[10px] font-black uppercase"
+                            >
+                              {step.mediaUrl ? 'Change Media' : 'Upload Media'}
+                            </button>
+                            {step.mediaUrl && (
+                              <button 
+                                onClick={() => {
+                                  const newSteps = [...guideToEdit.steps];
+                                  delete newSteps[sIdx].mediaUrl;
+                                  delete newSteps[sIdx].mediaType;
+                                  setGuideToEdit({...guideToEdit, steps: newSteps});
+                                }}
+                                className="px-3 py-2 bg-red-50 text-red-600 rounded-xl text-[10px] font-black uppercase"
+                              >🗑️</button>
+                            )}
+                          </div>
+                          {step.mediaUrl && (
+                            <div className="rounded-xl overflow-hidden border border-gray-200">
+                              {step.mediaType === 'video' ? (
+                                <video src={step.mediaUrl} className="w-full h-32 object-cover" controls />
+                              ) : (
+                                <img src={step.mediaUrl} className="w-full h-32 object-cover" />
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                      <button 
+                        onClick={() => setGuideToEdit({...guideToEdit, steps: [...guideToEdit.steps, { text: '', feedback: 'Keep going, you are doing great!' }]})}
+                        className="w-full py-3 border-2 border-dashed border-gray-200 rounded-2xl text-gray-400 text-[10px] font-black uppercase"
+                      >+ Add Step</button>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex gap-4 pt-4">
+                  <button onClick={() => { setIsEditingGuide(false); setGuideToEdit(null); }} className="flex-1 py-4 bg-gray-100 text-gray-400 rounded-2xl font-black uppercase text-[10px]">Cancel</button>
+                  <button 
+                    onClick={() => {
+                      setSelectedGuide(guideToEdit);
+                      setCurrentStepIndex(0);
+                      setIsEditingGuide(false);
+                    }}
+                    className="flex-1 py-4 bg-blue-50 text-blue-600 rounded-2xl font-black uppercase text-[10px]"
+                  >Preview</button>
+                  <button onClick={() => saveCustomGuide(guideToEdit)} className="flex-[2] py-4 bg-red-600 text-white rounded-2xl font-black shadow-lg uppercase text-[10px]">Save Changes</button>
+                </div>
+              </div>
+            </div>
+          ) : !selectedGuide ? (
+            <div className="space-y-6">
+              <div className="relative">
+                <input 
+                  type="text" 
+                  placeholder="Search Guides..." 
+                  value={guideSearch}
+                  onChange={(e) => setGuideSearch(e.target.value)}
+                  className="w-full p-4 bg-gray-50 rounded-2xl border-none text-sm font-medium focus:ring-2 focus:ring-red-100 outline-none"
+                />
+                {guideSearch ? (
+                  <button onClick={() => setGuideSearch('')} className="absolute right-10 top-4 opacity-30">✕</button>
+                ) : null}
+                <span className="absolute right-4 top-4 opacity-30">🔍</span>
               </div>
 
-              {showFeedback ? (
-                <div className="bg-green-50 p-6 rounded-2xl border-2 border-green-200 text-center animate-bounce">
-                  <span className="text-3xl mb-2 block">✅</span>
-                  <p className="text-green-800 font-bold">{selectedGuide.steps[currentStepIndex].feedback}</p>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {selectedGuide.steps[currentStepIndex].critical && (
-                    <div className="bg-red-50 p-4 rounded-2xl border border-red-200 flex gap-3 items-center">
-                      <span className="text-xl">⚠️</span>
-                      <p className="text-red-700 text-sm font-bold">CRITICAL STEP: Follow instructions carefully.</p>
-                    </div>
-                  )}
-                  
+              <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide px-1">
+                {guideCategories.map(cat => (
                   <button 
-                    onClick={handleNextStep}
-                    className="w-full py-6 bg-red-600 text-white rounded-3xl font-black text-xl shadow-xl active:scale-95 transition-all uppercase tracking-widest"
+                    key={cat} 
+                    onClick={() => setGuideCategory(cat)}
+                    className={`px-6 py-2 rounded-full text-[10px] font-black transition-all border whitespace-nowrap ${guideCategory === cat ? 'bg-red-600 text-white border-red-700' : 'bg-white text-gray-400 border-gray-100'}`}
                   >
-                    I Have Done This
+                    {cat}
                   </button>
-                  <button 
-                    onClick={() => setActiveTab('directory')}
-                    className="w-full py-4 bg-gray-100 text-gray-600 rounded-3xl font-bold flex items-center justify-center gap-2"
-                  >
-                    <span>📍</span> Find Nearby Hospital
-                  </button>
-                </div>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                {filteredGuides.map(guide => (
+                  <div key={guide.id} className="relative group">
+                    <button onClick={() => { setSelectedGuide(guide); setCurrentStepIndex(0); speakGuide(guide, guide.steps[0]); }} className="w-full bg-white p-6 rounded-[32px] border-2 border-gray-50 shadow-sm flex flex-col items-center active:scale-95 transition-all">
+                      <span className="text-4xl mb-3">{guide.icon}</span>
+                      <span className="font-bold text-gray-800 text-[10px] text-center uppercase tracking-widest">{guide.title}</span>
+                    </button>
+                    {currentUser.role === UserRole.ORGANIZATION && (
+                      <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); setGuideToEdit(JSON.parse(JSON.stringify(guide))); setIsEditingGuide(true); }}
+                          className="p-2 bg-white/80 backdrop-blur rounded-full shadow-sm"
+                        >✏️</button>
+                        {customGuides.some(cg => cg.id === guide.id) && (
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); deleteCustomGuide(guide.id); }}
+                            className="p-2 bg-white/80 backdrop-blur rounded-full shadow-sm text-red-600"
+                          >🗑️</button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {currentUser.role === UserRole.ORGANIZATION && (
+                <button 
+                  onClick={() => {
+                    const newId = 'custom-' + Math.random().toString(36).substr(2, 9);
+                    setGuideToEdit({
+                      id: newId,
+                      title: 'New Guide',
+                      icon: '🩹',
+                      image: 'https://images.unsplash.com/photo-1584036561566-baf8f5f1b144?auto=format&fit=crop&q=80&w=400',
+                      steps: [{ text: 'First step...', feedback: 'Good start!' }],
+                      furtherHelp: '',
+                      whenToCallSOS: ''
+                    });
+                    setIsEditingGuide(true);
+                  }}
+                  className="w-full py-5 bg-blue-600 text-white rounded-[32px] font-black shadow-xl uppercase tracking-widest text-xs"
+                >+ Create New Guide</button>
               )}
+            </div>
+          ) : (
+            <div className="space-y-6 animate-fadeIn">
+              <div className="relative overflow-hidden rounded-[40px] shadow-2xl bg-gray-100 border-4 border-white">
+                {selectedGuide.steps[currentStepIndex].mediaUrl ? (
+                  selectedGuide.steps[currentStepIndex].mediaType === 'video' ? (
+                    <video src={selectedGuide.steps[currentStepIndex].mediaUrl} className="w-full h-72 object-cover" controls autoPlay muted loop />
+                  ) : (
+                    <img src={selectedGuide.steps[currentStepIndex].mediaUrl} className="w-full h-72 object-cover" alt="Step Illustration" />
+                  )
+                ) : (
+                  <img src={selectedGuide.image} className="w-full h-72 object-cover" alt="Guide Image" />
+                )}
+                <div className="absolute top-4 left-4 bg-red-600 text-white px-6 py-2 rounded-full text-[10px] font-black uppercase tracking-widest shadow-lg">Step {currentStepIndex + 1} of {selectedGuide.steps.length}</div>
+                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-6 pt-12">
+                  <p className="text-white text-[10px] font-black uppercase tracking-[0.2em] opacity-80">Visual Guide</p>
+                </div>
+              </div>
               
-              <div className="w-full bg-gray-100 h-2 rounded-full overflow-hidden">
-                <div 
-                  className="bg-red-600 h-full transition-all duration-500" 
-                  style={{ width: `${((currentStepIndex + 1) / selectedGuide.steps.length) * 100}%` }}
+              <div className="px-2 space-y-4">
+                <h2 className="text-2xl font-black text-gray-900 leading-tight tracking-tight">{selectedGuide.steps[currentStepIndex].text}</h2>
+                
+                <div className="p-5 bg-green-50 rounded-[32px] border-2 border-green-100 flex gap-4 items-start">
+                  <span className="text-2xl">💡</span>
+                  <p className="text-xs font-bold text-green-800 leading-relaxed">{selectedGuide.steps[currentStepIndex].feedback}</p>
+                </div>
+
+                {selectedGuide.steps[currentStepIndex].critical && (
+                  <div className="p-5 bg-red-50 rounded-[32px] border-2 border-red-100 flex gap-4 items-start animate-pulse">
+                    <span className="text-2xl">⚠️</span>
+                    <p className="text-xs font-black text-red-800 uppercase tracking-wider">Critical Action Required</p>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-4 pt-4">
+                <button onClick={() => speakGuide(selectedGuide, selectedGuide.steps[currentStepIndex])} className="flex-1 py-5 bg-gray-100 text-gray-800 rounded-[32px] font-black text-[10px] uppercase tracking-widest hover:bg-gray-200 transition-all flex items-center justify-center gap-2">
+                  <Volume2 size={16} />
+                  Listen
+                </button>
+                <button 
+                  onClick={() => currentStepIndex < selectedGuide.steps.length - 1 ? setCurrentStepIndex(currentStepIndex+1) : setSelectedGuide(null)} 
+                  className="flex-[2] py-5 bg-red-600 text-white rounded-[32px] font-black shadow-xl hover:bg-red-700 active:scale-95 transition-all uppercase tracking-widest"
+                >
+                  {currentStepIndex < selectedGuide.steps.length - 1 ? 'Next Step' : 'Finish Guide'}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'checker' && (
+        <div className="space-y-6 animate-fadeIn">
+          <div className="bg-orange-50 p-4 rounded-2xl border border-orange-100 flex gap-3 items-start">
+            <AlertTriangle size={18} className="text-orange-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-[10px] font-black text-orange-800 uppercase tracking-widest">Medical Disclaimer</p>
+              <p className="text-[10px] text-orange-700 font-medium leading-relaxed">This AI tool provides information for educational purposes only. It is NOT a substitute for professional medical advice, diagnosis, or treatment. In an emergency, call 112 immediately.</p>
+            </div>
+          </div>
+
+          <div className="bg-white p-8 rounded-[40px] border-2 border-gray-50 shadow-sm space-y-4">
+            <div className="flex justify-between items-center">
+              <h3 className="text-xl font-black text-gray-800">Symptom Analysis</h3>
+              <div className="flex gap-2">
+                <button 
+                  onClick={startVoiceInput} 
+                  className={`p-3 rounded-2xl transition-all ${isListening ? 'bg-red-600 text-white animate-pulse' : 'bg-gray-100 text-gray-600'}`}
+                  title="Voice Input"
+                >
+                  <Mic size={20} />
+                </button>
+                <button 
+                  onClick={() => document.getElementById('symptom-image-input')?.click()} 
+                  className="p-3 bg-gray-100 text-gray-600 rounded-2xl transition-all"
+                  title="Visual Input"
+                >
+                  <Camera size={20} />
+                </button>
+                <input 
+                  id="symptom-image-input" 
+                  type="file" 
+                  accept="image/*" 
+                  className="hidden" 
+                  onChange={handleSymptomImage} 
                 />
               </div>
             </div>
-          ) : (
-            <div className="space-y-6 animate-slideUp">
-              <div className="bg-blue-50 p-8 rounded-[40px] text-center border-2 border-blue-100">
-                <span className="text-6xl mb-6 block">🏁</span>
-                <h2 className="text-3xl font-black text-blue-900 mb-4 uppercase">Steps Completed!</h2>
-                <p className="text-blue-800 font-medium mb-8 leading-relaxed">
-                  {selectedGuide.furtherHelp}
-                </p>
-                
-                <div className="bg-white p-6 rounded-3xl text-left border border-blue-200 mb-8">
-                  <h4 className="font-bold text-red-600 text-sm uppercase mb-2">When to use SOS:</h4>
-                  <p className="text-gray-600 text-sm italic">{selectedGuide.whenToCallSOS}</p>
-                </div>
-
-                <div className="flex flex-col gap-3">
-                  <button 
-                    onClick={() => {
-                      setSelectedGuide(null);
-                      setCurrentStepIndex(0);
-                    }} 
-                    className="w-full py-4 bg-blue-900 text-white rounded-2xl font-bold uppercase"
-                  >
-                    Back to Guides
-                  </button>
-                  <button 
-                    onClick={() => setActiveTab('home')} 
-                    className="w-full py-4 bg-gray-100 text-gray-600 rounded-2xl font-bold uppercase"
-                  >
-                    Return Home
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Symptom Checker */}
-      {activeTab === 'checker' && (
-        <div className="space-y-6 animate-fadeIn">
-          <div className="bg-purple-50 p-6 rounded-3xl border border-purple-100 relative overflow-hidden">
-            <h3 className="text-xl font-bold text-purple-900 mb-2">Smart Assistant</h3>
-            <p className="text-purple-700 text-sm mb-4 italic opacity-80">Use voice or camera for faster help</p>
             
-            <div className="relative group">
+            <div className="relative">
               <textarea 
-                value={symptomText}
-                onChange={(e) => setSymptomText(e.target.value)}
-                placeholder="Describe how you feel..."
-                className="w-full h-32 p-4 pr-12 rounded-2xl border-2 border-purple-200 focus:border-purple-500 outline-none transition-all resize-none mb-4 shadow-inner"
+                value={symptomText} 
+                onChange={(e) => setSymptomText(e.target.value)} 
+                placeholder="Tell AI how you feel..." 
+                className="w-full h-32 p-5 bg-gray-50 rounded-3xl border-0 text-sm resize-none focus:ring-2 focus:ring-red-100 outline-none" 
               />
-              <button 
-                onClick={startVoiceInput}
-                className={`absolute right-3 top-3 p-2 rounded-full transition-all ${isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-purple-100 text-purple-600 hover:bg-purple-200'}`}
-              >
-                <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20"><path d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z"/></svg>
-              </button>
-            </div>
-            
-            <div className="flex gap-4 mb-4">
-              <button 
-                onClick={openCamera}
-                className="flex-1 py-3 bg-white border-2 border-purple-200 rounded-2xl flex items-center justify-center gap-2 font-bold text-purple-700 hover:bg-purple-100 transition-all"
-              >
-                <span>📷</span> Capture Incident
-              </button>
-            </div>
-
-            {capturedImage && (
-              <div className="relative w-full aspect-video rounded-2xl overflow-hidden mb-4 border-2 border-purple-300 shadow-md">
-                <img src={capturedImage} className="w-full h-full object-cover" />
-                <button 
-                  onClick={() => setCapturedImage(null)}
-                  className="absolute top-2 right-2 bg-red-600 text-white w-8 h-8 rounded-full flex items-center justify-center shadow-lg"
-                >
-                  ✕
-                </button>
-              </div>
-            )}
-            
-            <button 
-              onClick={checkSymptoms}
-              disabled={loading || (!symptomText && !capturedImage)}
-              className={`w-full py-4 rounded-2xl font-bold text-white shadow-lg transition-all ${loading ? 'bg-purple-300' : 'bg-purple-600 hover:bg-purple-700 active:scale-95'}`}
-            >
-              {loading ? 'Analyzing Input...' : 'Analyze Now'}
-            </button>
-          </div>
-
-          {checkerResult && (
-            <div className="bg-white p-6 rounded-3xl border shadow-xl animate-slideUp">
-              <div className="flex items-center justify-between mb-4">
-                <span className={`px-4 py-1 rounded-full text-xs font-bold uppercase ${
-                  checkerResult.severity === 'High' ? 'bg-red-100 text-red-600' : 
-                  checkerResult.severity === 'Medium' ? 'bg-orange-100 text-orange-600' : 'bg-green-100 text-green-600'
-                }`}>
-                  Severity: {checkerResult.severity}
-                </span>
-                <button onClick={() => setCheckerResult(null)} className="text-gray-400">✕</button>
-              </div>
-              <h4 className="font-bold text-lg mb-2">AI Advice:</h4>
-              <p className="text-gray-600 mb-4 italic leading-relaxed">"{checkerResult.advice}"</p>
-              <h4 className="font-bold text-lg mb-2">First Aid Steps:</h4>
-              <ul className="space-y-3">
-                {checkerResult.steps.map((s: string, i: number) => (
-                  <li key={i} className="flex items-start gap-3 text-sm text-gray-700">
-                    <span className="w-5 h-5 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center text-[10px] font-bold flex-shrink-0 mt-0.5">{i+1}</span>
-                    <span>{s}</span>
-                  </li>
-                ))}
-              </ul>
-              <div className="mt-6 p-4 bg-red-50 text-red-700 text-[10px] rounded-xl border border-red-100 font-medium">
-                ⚠️ THIS IS AN AI ESTIMATE. Always seek professional help for serious injuries.
-              </div>
-            </div>
-          )}
-
-          {showCamera && (
-            <div className="fixed inset-0 z-[100] bg-black flex flex-col items-center justify-center p-4">
-              <div className="relative w-full max-w-md bg-gray-900 rounded-3xl overflow-hidden shadow-2xl">
-                <video ref={videoRef} autoPlay playsInline className="w-full h-[70vh] object-cover" />
-                <div className="absolute bottom-8 left-0 right-0 flex justify-center items-center gap-12">
-                  <button onClick={closeCamera} className="w-14 h-14 bg-white/20 backdrop-blur-md rounded-full text-white flex items-center justify-center text-xl">✕</button>
-                  <button onClick={capturePhoto} className="w-20 h-20 bg-white rounded-full border-4 border-gray-300 shadow-xl active:scale-90 transition-transform"></button>
-                  <div className="w-14 h-14"></div>
+              {capturedImage && (
+                <div className="absolute bottom-4 right-4 w-16 h-16 rounded-xl overflow-hidden border-2 border-white shadow-md">
+                  <img src={capturedImage} className="w-full h-full object-cover" />
+                  <button 
+                    onClick={() => setCapturedImage(null)} 
+                    className="absolute top-0 right-0 bg-red-600 text-white text-[8px] p-1 rounded-bl-lg"
+                  >✕</button>
                 </div>
-              </div>
-              <canvas ref={canvasRef} className="hidden" />
-              <p className="text-white mt-6 text-sm font-bold opacity-75">Point camera at the injury/incident</p>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Directory */}
-      {activeTab === 'directory' && (
-        <div className="space-y-4 animate-fadeIn">
-          <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
-            {['All', 'Clinic', 'Hospital', 'Volunteer'].map(cat => (
-              <button key={cat} className="px-4 py-2 bg-gray-100 rounded-full text-sm font-bold whitespace-nowrap text-gray-600 active:bg-red-600 active:text-white">
-                {cat}
-              </button>
-            ))}
-          </div>
-
-          {HEALTH_DIRECTORY.map((place, i) => (
-            <div key={i} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-start gap-4">
-              <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-2xl flex-shrink-0 ${
-                place.type === 'Hospital' ? 'bg-red-50 text-red-600' : 
-                place.type === 'Clinic' ? 'bg-blue-50 text-blue-600' : 'bg-green-50 text-green-600'
-              }`}>
-                {place.type === 'Hospital' ? '🏥' : place.type === 'Clinic' ? '🩺' : '🤝'}
-              </div>
-              <div className="flex-1">
-                <h4 className="font-bold text-gray-800">{place.name}</h4>
-                <p className="text-xs text-gray-500 mb-2">{place.address} • {place.distance}</p>
-                <div className="flex gap-2">
-                  <a href={`tel:${place.phone}`} className="px-4 py-2 bg-red-600 text-white text-xs font-bold rounded-lg flex items-center gap-1 shadow-md active:scale-95 transition-all">
-                    <span>📞</span> Call
-                  </a>
-                  <button className="px-4 py-2 bg-gray-100 text-gray-700 text-xs font-bold rounded-lg active:scale-95 transition-all">
-                    📍 Directions
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Profile */}
-      {activeTab === 'profile' && (
-        <div className="space-y-6 animate-fadeIn">
-          <div className="text-center p-8 bg-gray-50 rounded-3xl border border-gray-100">
-            <div className="w-24 h-24 bg-red-600 text-white text-4xl font-black flex items-center justify-center rounded-full mx-auto mb-4 border-4 border-white shadow-xl">
-              {currentUser.fullName.charAt(0)}
-            </div>
-            <h2 className="text-2xl font-bold">{currentUser.fullName}</h2>
-            <p className="text-red-600 font-bold uppercase tracking-wider text-xs">{currentUser.role}</p>
-          </div>
-
-          <div className="space-y-4">
-            <h3 className="font-bold text-gray-500 text-xs uppercase px-2 tracking-widest">Medical Details</h3>
-            <div className="grid grid-cols-2 gap-3">
-              <ProfileItem label="Blood" value={currentUser.bloodGroup} />
-              <ProfileItem label="Genotype" value={currentUser.genotype} />
-              <ProfileItem label="Age" value={currentUser.age.toString()} />
-              <ProfileItem label="Gender" value={currentUser.gender} />
-            </div>
-
-            <div className="bg-white p-5 rounded-3xl border border-gray-100 space-y-4 shadow-sm">
-              <ProfileSection icon="🏠" label="Address" value={currentUser.address} />
-              <ProfileSection icon="⚠️" label="Health Challenges" value={currentUser.healthChallenges || 'None'} />
-              <ProfileSection icon="📞" label="Emergency Contact" value={currentUser.emergencyContact} />
-              {currentUser.role === UserRole.CAREGIVER && (
-                <>
-                  <ProfileSection icon="🎓" label="Specialty" value={currentUser.medicalSpecialty || 'General'} />
-                  <ProfileSection icon="🤝" label="Communication" value={currentUser.patientInteractionMethod || 'Voice call'} />
-                </>
               )}
             </div>
-          </div>
 
-          <button onClick={handleLogout} className="w-full py-4 bg-gray-100 text-gray-500 rounded-2xl font-bold mt-8 border-2 border-transparent hover:border-gray-200 transition-all">
-            Sign Out
-          </button>
+            <button onClick={checkSymptoms} disabled={loading} className="w-full py-5 bg-red-600 text-white rounded-2xl font-black shadow-lg active:scale-95 transition-all disabled:opacity-50">
+              {loading ? 'ANALYZING...' : 'GET ADVICE'}
+            </button>
+          </div>
+          {checkerResult && (
+            <div className="bg-white p-8 rounded-[40px] shadow-xl animate-slideUp border border-gray-50">
+              <div className="flex justify-between items-center mb-4">
+                <span className="px-3 py-1 bg-red-50 text-red-600 text-[10px] font-black rounded-full uppercase">Severity: {checkerResult.severity}</span>
+              </div>
+              <p className="text-gray-600 text-sm font-medium mb-6">"{checkerResult.advice}"</p>
+              <div className="space-y-3">
+                {checkerResult.steps.map((s: string, i: number) => (
+                  <div key={i} className="flex gap-3 text-xs text-gray-700 bg-gray-50 p-4 rounded-2xl font-bold">
+                    <span className="text-red-600">{i+1}.</span>
+                    <span>{s}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
+      )}
+
+      {activeTab === 'contacts' && (
+        <div className="space-y-6 animate-fadeIn">
+          <div className="bg-white p-8 rounded-[40px] border-2 border-gray-50 shadow-sm space-y-6">
+            <h3 className="text-xl font-black text-gray-800">Emergency Contacts</h3>
+            <p className="text-xs text-gray-400 font-medium">Add family members or organizations to your emergency network.</p>
+            
+            <div className="space-y-4">
+              {(currentUser.sosContacts || []).map(contact => (
+                <div key={contact.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                  <div>
+                    <p className="font-black text-gray-800 text-sm">{contact.name}</p>
+                    <p className="text-[9px] font-bold text-red-600 uppercase tracking-widest">{contact.type} • {contact.phone}</p>
+                  </div>
+                  <button 
+                    onClick={() => {
+                      const updated = currentUser.sosContacts.filter(c => c.id !== contact.id);
+                      updateProfile({ sosContacts: updated });
+                    }}
+                    className="p-2 text-red-600"
+                  >🗑️</button>
+                </div>
+              ))}
+            </div>
+
+            <div className="pt-4 border-t border-gray-100 space-y-4">
+              <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Add New Contact</p>
+              <form onSubmit={(e) => {
+                e.preventDefault();
+                const form = e.currentTarget;
+                const name = (form.elements.namedItem('name') as HTMLInputElement).value;
+                const phone = (form.elements.namedItem('phone') as HTMLInputElement).value;
+                const type = (form.elements.namedItem('type') as HTMLSelectElement).value as any;
+                
+                if (name && phone) {
+                  const newContact: EmergencyContact = {
+                    id: Math.random().toString(36).substr(2, 9),
+                    name,
+                    phone,
+                    type
+                  };
+                  updateProfile({ sosContacts: [...(currentUser.sosContacts || []), newContact] });
+                  form.reset();
+                }
+              }} className="space-y-3">
+                <input name="name" placeholder="Contact Name" className="w-full p-4 bg-gray-50 rounded-2xl border-none text-sm" required />
+                <input name="phone" placeholder="Phone Number" className="w-full p-4 bg-gray-50 rounded-2xl border-none text-sm" required />
+                <select name="type" className="w-full p-4 bg-gray-50 rounded-2xl border-none text-sm appearance-none" required>
+                  <option value="Family">Family</option>
+                  <option value="Org">Organization</option>
+                </select>
+                <button type="submit" className="w-full py-4 bg-red-600 text-white rounded-2xl font-black shadow-lg uppercase text-[10px]">Add Contact</button>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'profile' && (
+        <div className="space-y-6 animate-fadeIn">
+          {!isEditingProfile ? (
+            <>
+              <div className="text-center p-10 bg-gray-50 rounded-[48px]">
+                <div className="w-24 h-24 bg-red-600 text-white text-5xl font-black flex items-center justify-center rounded-full mx-auto mb-6 shadow-2xl border-4 border-white overflow-hidden">
+                  {currentUser.profilePicture ? <img src={currentUser.profilePicture} className="w-full h-full object-cover" /> : currentUser.fullName.charAt(0)}
+                </div>
+                <h2 className="text-2xl font-black text-gray-800">{currentUser.fullName}</h2>
+                <p className="text-red-600 text-[10px] font-black uppercase tracking-widest mt-2">{currentUser.role}</p>
+                <button onClick={() => { setEditData(currentUser); setIsEditingProfile(true); }} className="mt-6 px-8 py-2.5 bg-white text-gray-800 rounded-full text-[10px] font-black uppercase shadow-sm border border-gray-100">EDIT PROFILE</button>
+              </div>
+              <div className="bg-white p-8 rounded-[40px] border-2 border-gray-50 space-y-6 shadow-sm">
+                <InfoRow icon={<Phone size={16} />} label="Phone" value={currentUser.phone} />
+                <InfoRow icon={<Activity size={16} />} label="Medical" value={`${currentUser.bloodGroup || 'N/A'} • ${currentUser.genotype || 'N/A'}`} />
+                <InfoRow icon={<Users size={16} />} label="Emergency Network" value={`${(currentUser.sosContacts || []).length} configured`} />
+              </div>
+              <div className="space-y-3">
+                <button 
+                  onClick={() => setActiveTab('privacy')}
+                  className="w-full py-4 bg-gray-50 text-gray-600 rounded-3xl font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 border border-gray-100"
+                >
+                  <Shield size={14} />
+                  Privacy & Data Policy
+                </button>
+                <button onClick={handleLogout} className="w-full py-5 bg-red-50 text-red-600 rounded-3xl font-black uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 border border-red-100">
+                  <LogOut size={16} />
+                  Sign Out
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="space-y-6">
+              <div className="text-center relative">
+                <div onClick={() => fileInputRef.current?.click()} className="w-28 h-28 bg-gray-100 rounded-full mx-auto cursor-pointer border-4 border-white shadow-xl overflow-hidden flex items-center justify-center group relative">
+                  {editData.profilePicture ? <img src={editData.profilePicture} className="w-full h-full object-cover" /> : <Camera className="text-gray-300" size={32} />}
+                  <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                    <Edit2 className="text-white" size={20} />
+                  </div>
+                </div>
+                <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileChange} />
+              </div>
+              <div className="bg-white p-8 rounded-[40px] border-2 border-gray-100 space-y-5">
+                <EditInput label="Name" value={editData.fullName} onChange={(val) => setEditData({...editData, fullName: val})} />
+                <EditInput label="Phone" value={editData.phone} onChange={(val) => setEditData({...editData, phone: val})} />
+                <EditInput label="Challenges" value={editData.healthChallenges} onChange={(val) => setEditData({...editData, healthChallenges: val})} placeholder="e.g. Asthma, Allergies" />
+              </div>
+              <div className="flex gap-4">
+                <button onClick={() => setIsEditingProfile(false)} className="flex-1 py-5 bg-gray-100 text-gray-500 rounded-3xl font-black uppercase text-xs">Cancel</button>
+                <button onClick={handleSaveProfile} className="flex-1 py-5 bg-red-600 text-white rounded-3xl font-black uppercase text-xs shadow-lg">Save</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      {activeTab === 'privacy' && (
+        <PrivacyPolicy 
+          onBack={() => setActiveTab('profile')} 
+          onDeleteAccount={handleDeleteAccount} 
+        />
       )}
     </Layout>
   );
 };
 
-const ProfileItem: React.FC<{ label: string; value: string }> = ({ label, value }) => (
-  <div className="bg-white p-4 rounded-2xl border border-gray-100 text-center shadow-sm">
-    <p className="text-[10px] text-gray-400 font-bold uppercase">{label}</p>
-    <p className="text-lg font-bold text-gray-800">{value}</p>
+const QuickAction: React.FC<{ icon: React.ReactNode; label: string; bg: string; color: string; onClick: () => void }> = ({ icon, label, bg, color, onClick }) => (
+  <button onClick={onClick} className={`${bg} p-8 rounded-[40px] flex flex-col items-center shadow-sm active:scale-95 transition-all`}>
+    <div className="mb-3">{icon}</div>
+    <span className={`font-black uppercase text-[9px] tracking-widest ${color}`}>{label}</span>
+  </button>
+);
+
+const InfoRow: React.FC<{ icon?: React.ReactNode; label: string; value: string }> = ({ icon, label, value }) => (
+  <div className="flex items-center gap-4">
+    {icon && <div className="text-red-600 opacity-40">{icon}</div>}
+    <div className="flex flex-col">
+      <span className="text-[8px] font-black text-gray-300 uppercase tracking-widest mb-1">{label}</span>
+      <span className="text-sm font-bold text-gray-700">{value}</span>
+    </div>
   </div>
 );
 
-const ProfileSection: React.FC<{ icon: string; label: string; value: string }> = ({ icon, label, value }) => (
-  <div className="flex items-start gap-4">
-    <span className="text-xl mt-1">{icon}</span>
-    <div>
-      <p className="text-[10px] text-gray-400 font-bold uppercase">{label}</p>
-      <p className="text-sm font-semibold text-gray-700">{value}</p>
-    </div>
+const EditInput: React.FC<{ label: string; value: string | undefined; onChange: (v: string) => void; placeholder?: string }> = ({ label, value, onChange, placeholder }) => (
+  <div className="space-y-1">
+    <label className="text-[8px] font-black text-red-600 uppercase tracking-widest ml-1">{label}</label>
+    <input type="text" value={value || ''} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} className="w-full p-4 bg-gray-50 rounded-2xl border-none outline-none text-sm font-medium" />
+  </div>
+);
+
+const MedicalMetric: React.FC<{ icon: React.ReactNode; label: string; value: string }> = ({ icon, label, value }) => (
+  <div className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex flex-col items-center text-center">
+    <div className="mb-2 text-red-600">{icon}</div>
+    <span className="text-[8px] font-black text-gray-400 uppercase tracking-widest">{label}</span>
+    <span className="text-sm font-black text-gray-800 mt-1">{value}</span>
   </div>
 );
 

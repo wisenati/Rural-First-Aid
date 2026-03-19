@@ -1,0 +1,21 @@
+{
+  "name": "RuralHealth Connect",
+  "short_name": "RuralHealth",
+  "description": "Offline-first emergency first aid and health connection app for rural areas.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#dc2626",
+  "icons": [
+    {
+      "src": "https://picsum.photos/seed/health/192/192",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://picsum.photos/seed/health/512/512",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

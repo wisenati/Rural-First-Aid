@@ -1,10 +1,9 @@
 
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 
-const API_KEY = process.env.API_KEY || '';
-
 export class GeminiService {
-  private static ai = new GoogleGenAI({ apiKey: API_KEY });
+  // Use process.env.API_KEY directly as per guidelines
+  private static ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
   static async checkSymptoms(symptoms: string, imageBase64?: string) {
     const parts: any[] = [{ text: `User symptoms description: ${symptoms}. Provide simple first aid steps, estimated severity (Low/Medium/High), and recommended actions. Keep language simple for rural users.` }];
@@ -61,6 +60,7 @@ export class GeminiService {
     }
   }
 
+  // Raw PCM playback logic for browser AudioContext
   private static async playRawPCM(base64: string) {
     const ctx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
     const binary = atob(base64);

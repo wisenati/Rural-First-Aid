@@ -17,6 +17,24 @@
       "android": {
         "buildType": "apk"
       }
+    },
+  {
+  "cli": {
+    "version": ">= 5.9.1"
+  },
+  "build": {
+    "preview": {
+      "distribution": "internal",
+      "node": "20.19.4",
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "production": {
+      "node": "20.19.4",
+      "android": {
+        "buildType": "apk"
+      }
     }
   }
 }

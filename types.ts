@@ -19,6 +19,12 @@ export interface EmergencyContact {
   type: 'Family' | 'Org' | 'National';
 }
 
+export interface UsageLog {
+  id: string;
+  action: string;
+  timestamp: string;
+}
+
 export interface UserProfile {
   id: string;
   role: UserRole;
@@ -45,6 +51,7 @@ export interface UserProfile {
   organizationName?: string;
   firmType?: 'Clinic' | 'Hospital' | 'Pharmacy' | 'Others';
   otherFirmType?: string;
+  usageLogs?: UsageLog[];
 }
 
 export interface InteractiveStep {

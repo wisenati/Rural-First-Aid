@@ -21,9 +21,12 @@ import {
   X,
   AlertTriangle,
   Lightbulb,
-  Shield
+  Shield,
+  Download,
+  History,
+  Mail
 } from 'lucide-react';
-import { UserProfile, UserRole, Language, EmergencyGuide, InteractiveStep, HealthFacility, EmergencyContact } from './types';
+import { UserProfile, UserRole, Language, EmergencyGuide, InteractiveStep, HealthFacility, EmergencyContact, UsageLog } from './types';
 import { EMERGENCY_GUIDES, HEALTH_DIRECTORY, MOCK_BROADCASTS } from './constants';
 import Layout from './components/Layout';
 import SOSButton from './components/SOSButton';
@@ -43,6 +46,42 @@ const App: React.FC = () => {
   const [isListening, setIsListening] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [currentTipIndex, setCurrentTipIndex] = useState(0);
+  const [allRegisteredUsers, setAllRegisteredUsers] = useState<UserProfile[]>([]);
+
+  useEffect(() => {
+    const syncUsers = () => {
+      const savedAll = localStorage.getItem('all_registered_users');
+      if (savedAll) {
+        try {
+          setAllRegisteredUsers(JSON.parse(savedAll));
+        } catch (e) {
+          console.error("Failed to parse registered users", e);
+        }
+      }
+    };
+
+    syncUsers();
+
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'all_registered_users') {
+        syncUsers();
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
+
+  const logAction = (action: string) => {
+    if (!currentUser) return;
+    const newLog: UsageLog = {
+      id: Math.random().toString(36).substr(2, 9),
+      action,
+      timestamp: new Date().toISOString()
+    };
+    const updatedLogs = [newLog, ...(currentUser.usageLogs || [])].slice(0, 50); // Keep last 50
+    updateProfile({ usageLogs: updatedLogs });
+  };
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -68,6 +107,7 @@ const App: React.FC = () => {
   const [directoryCategory, setDirectoryCategory] = useState('All');
   const [directorySearch, setDirectorySearch] = useState('');
   const [selectedPatientProfile, setSelectedPatientProfile] = useState<UserProfile | null>(null);
+  const [selectedHelper, setSelectedHelper] = useState<any>(null);
   
   // Custom Guides State
   const [customGuides, setCustomGuides] = useState<EmergencyGuide[]>([]);
@@ -137,8 +177,11 @@ const App: React.FC = () => {
     const index = allUsers.findIndex((u: UserProfile) => u.id === currentUser.id);
     if (index !== -1) {
       allUsers[index] = updated;
-      localStorage.setItem('all_registered_users', JSON.stringify(allUsers));
+    } else {
+      allUsers.push(updated);
     }
+    localStorage.setItem('all_registered_users', JSON.stringify(allUsers));
+    setAllRegisteredUsers(allUsers);
   };
 
   const handleSaveProfile = () => {
@@ -159,15 +202,21 @@ const App: React.FC = () => {
   };
 
   const dynamicDirectoryItems = useMemo(() => {
-    const allRegistered = JSON.parse(localStorage.getItem('all_registered_users') || '[]');
-    
-    if (currentUser?.role === UserRole.PATIENT) {
-      const helpers: HealthFacility[] = allRegistered
-        .filter((u: UserProfile) => u.showInHelp && u.id !== currentUser?.id && (u.role === UserRole.ORGANIZATION || u.role === UserRole.CAREGIVER))
+    if (!currentUser) return HEALTH_DIRECTORY;
+
+    if (currentUser.role === UserRole.PATIENT) {
+      const helpers: HealthFacility[] = allRegisteredUsers
+        .filter((u: UserProfile) => {
+          // Ensure we show users who explicitly opted in
+          const isVisible = u.showInHelp === true || (u as any).showInHelp === 'true';
+          const isNotMe = u.id !== currentUser.id;
+          const isHelper = u.role === UserRole.ORGANIZATION || u.role === UserRole.CAREGIVER;
+          return isVisible && isNotMe && isHelper;
+        })
         .map((u: UserProfile) => ({
           id: u.id,
-          name: u.role === UserRole.ORGANIZATION ? (u.organizationName || 'Unnamed Org') : u.fullName,
-          type: u.role === UserRole.ORGANIZATION ? (u.firmType === 'Others' ? (u.otherFirmType as any || 'Organization') : u.firmType) : 'Volunteer',
+          name: u.role === UserRole.ORGANIZATION ? (u.organizationName || u.fullName || 'Unnamed Organization') : u.fullName,
+          type: u.role === UserRole.ORGANIZATION ? (u.firmType === 'Others' ? (u.otherFirmType || 'Organization') : (u.firmType || 'Health Facility')) : 'Volunteer Provider',
           distance: 'Community Helper',
           phone: u.phone,
           address: u.address,
@@ -175,9 +224,15 @@ const App: React.FC = () => {
         }));
       return [...HEALTH_DIRECTORY, ...helpers];
     } else {
-      return allRegistered.filter((u: UserProfile) => u.role === UserRole.PATIENT && u.showInHelp);
+      // Organizations and Caregivers see Patients who opted in
+      return allRegisteredUsers.filter((u: UserProfile) => {
+        const isVisible = u.showInHelp === true || (u as any).showInHelp === 'true';
+        const isNotMe = u.id !== currentUser.id;
+        const isPatient = u.role === UserRole.PATIENT;
+        return isVisible && isNotMe && isPatient;
+      });
     }
-  }, [currentUser]);
+  }, [currentUser, allRegisteredUsers]);
 
   const filteredDirectory = useMemo(() => {
     const searchStr = directorySearch.toLowerCase();
@@ -208,6 +263,7 @@ const App: React.FC = () => {
   const checkSymptoms = async () => {
     if (!symptomText.trim() && !capturedImage) return alert("Please describe symptoms or provide an image.");
     setLoading(true);
+    logAction(`Used Symptom Checker: ${symptomText.slice(0, 20)}...`);
     try {
       const result = await GeminiService.checkSymptoms(symptomText, capturedImage || undefined);
       setCheckerResult(result);
@@ -289,7 +345,16 @@ const App: React.FC = () => {
     if (selectedGuide?.id === id) setSelectedGuide(null);
   };
 
-  if (!currentUser) return <AuthScreen onLogin={setCurrentUser} />;
+  if (!currentUser) return <AuthScreen onLogin={(user) => {
+    setCurrentUser(user);
+    const all = JSON.parse(localStorage.getItem('all_registered_users') || '[]');
+    setAllRegisteredUsers(all);
+    // Log login
+    const newLog: UsageLog = { id: Math.random().toString(36).substr(2, 9), action: 'Logged In', timestamp: new Date().toISOString() };
+    const updated = { ...user, usageLogs: [newLog, ...(user.usageLogs || [])].slice(0, 50) };
+    setCurrentUser(updated);
+    localStorage.setItem('user_profile', JSON.stringify(updated));
+  }} />;
 
   return (
     <Layout 
@@ -297,11 +362,13 @@ const App: React.FC = () => {
       activeTab={activeTab} 
       setActiveTab={(tab) => { 
         setActiveTab(tab); 
+        logAction(`Navigated to ${tab}`);
         setSelectedGuide(null); 
         setIsEditingProfile(false); 
         setSelectedPatientProfile(null);
+        setSelectedHelper(null);
       }}
-      onBack={selectedGuide ? () => setSelectedGuide(null) : isEditingProfile ? () => setIsEditingProfile(false) : selectedPatientProfile ? () => setSelectedPatientProfile(null) : undefined}
+      onBack={selectedGuide ? () => setSelectedGuide(null) : isEditingProfile ? () => setIsEditingProfile(false) : selectedPatientProfile ? () => setSelectedPatientProfile(null) : selectedHelper ? () => setSelectedHelper(null) : undefined}
     >
       {!isOnline && (
         <div className="mb-4 p-3 bg-orange-100 border border-orange-200 rounded-2xl flex items-center gap-3 animate-fadeIn">
@@ -420,8 +487,55 @@ const App: React.FC = () => {
                   </button>
                 </div>
               </div>
+            ) : selectedHelper ? (
+              <div className="animate-slideUp space-y-6">
+                <div className="bg-blue-50 p-6 rounded-[40px] border border-blue-100 flex flex-col items-center">
+                  <div className="w-24 h-24 bg-blue-600 rounded-full mb-4 flex items-center justify-center text-white text-4xl font-black overflow-hidden border-4 border-white shadow-xl">
+                    {selectedHelper.profilePicture ? <img src={selectedHelper.profilePicture} className="w-full h-full object-cover" /> : (selectedHelper.name ? selectedHelper.name.charAt(0) : '🏥')}
+                  </div>
+                  <h3 className="text-xl font-black text-blue-900">{selectedHelper.name || selectedHelper.fullName}</h3>
+                  <p className="text-[10px] font-black text-blue-600 uppercase tracking-[2px]">{selectedHelper.type}</p>
+                </div>
+
+                <div className="bg-white p-8 rounded-[40px] border border-gray-100 shadow-sm space-y-6">
+                  <div>
+                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Location Address</p>
+                    <p className="text-sm font-medium text-gray-700 leading-relaxed">{selectedHelper.address || 'Address not provided'}</p>
+                  </div>
+                  
+                  <div className="flex flex-col gap-3">
+                    <button 
+                      onClick={() => {
+                        const query = encodeURIComponent(selectedHelper.address || selectedHelper.name);
+                        window.open(`https://www.google.com/maps/search/?api=1&query=${query}`, '_blank');
+                        logAction(`Got Directions to: ${selectedHelper.name}`);
+                      }}
+                      className="w-full py-5 bg-blue-600 text-white rounded-3xl font-black shadow-lg flex items-center justify-center gap-3 active:scale-95 transition-all"
+                    >
+                      <MapPin size={20} />
+                      GET DIRECTIONS
+                    </button>
+                    
+                    <a 
+                      href={`tel:${selectedHelper.phone}`}
+                      onClick={() => logAction(`Called Helper: ${selectedHelper.name}`)}
+                      className="w-full py-5 bg-red-600 text-white rounded-3xl font-black shadow-lg flex items-center justify-center gap-3 active:scale-95 transition-all"
+                    >
+                      <Phone size={20} />
+                      CALL NOW
+                    </a>
+                  </div>
+                </div>
+
+                <button 
+                  onClick={() => setSelectedHelper(null)}
+                  className="w-full py-4 bg-gray-100 text-gray-500 rounded-3xl font-black text-[10px] uppercase tracking-widest"
+                >
+                  Back to Directory
+                </button>
+              </div>
             ) : filteredDirectory.map((item: any, i) => (
-              <div key={i} className="bg-white p-5 rounded-[32px] border border-gray-50 shadow-sm flex items-center gap-4 active:scale-[0.98] transition-all" onClick={() => currentUser.role !== UserRole.PATIENT ? setSelectedPatientProfile(item) : null}>
+              <div key={i} className="bg-white p-5 rounded-[32px] border border-gray-50 shadow-sm flex items-center gap-4 active:scale-[0.98] transition-all" onClick={() => currentUser.role !== UserRole.PATIENT ? setSelectedPatientProfile(item) : setSelectedHelper(item)}>
                 <div className="w-14 h-14 bg-red-50 text-red-600 rounded-2xl flex items-center justify-center text-2xl overflow-hidden font-black">
                   {item.profilePicture ? <img src={item.profilePicture} className="w-full h-full object-cover" /> : (item.role === UserRole.PATIENT ? item.fullName.charAt(0) : '🏥')}
                 </div>
@@ -429,6 +543,16 @@ const App: React.FC = () => {
                   <h4 className="font-black text-gray-800 text-sm">{item.fullName || item.name || item.organizationName}</h4>
                   <p className="text-[9px] font-bold text-red-600 uppercase tracking-widest">{item.type || (item.role === UserRole.PATIENT ? `Patient • ${item.bloodGroup || 'N/A'}` : 'Responder')}</p>
                 </div>
+                {currentUser.role === UserRole.PATIENT && item.phone && (
+                  <a 
+                    href={`tel:${item.phone}`} 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      logAction(`Contacted Help: ${item.fullName || item.name || item.organizationName}`);
+                    }}
+                    className="p-3 bg-red-50 text-red-600 rounded-full shadow-sm active:scale-90 transition-all"
+                  >📞</a>
+                )}
               </div>
             ))}
             {(!filteredDirectory || filteredDirectory.length === 0) && (
@@ -637,7 +761,12 @@ const App: React.FC = () => {
               <div className="grid grid-cols-2 gap-4">
                 {filteredGuides.map(guide => (
                   <div key={guide.id} className="relative group">
-                    <button onClick={() => { setSelectedGuide(guide); setCurrentStepIndex(0); speakGuide(guide, guide.steps[0]); }} className="w-full bg-white p-6 rounded-[32px] border-2 border-gray-50 shadow-sm flex flex-col items-center active:scale-95 transition-all">
+                    <button onClick={() => { 
+                      setSelectedGuide(guide); 
+                      setCurrentStepIndex(0); 
+                      speakGuide(guide, guide.steps[0]); 
+                      logAction(`Viewed Guide: ${guide.title}`);
+                    }} className="w-full bg-white p-6 rounded-[32px] border-2 border-gray-50 shadow-sm flex flex-col items-center active:scale-95 transition-all">
                       <span className="text-4xl mb-3">{guide.icon}</span>
                       <span className="font-bold text-gray-800 text-[10px] text-center uppercase tracking-widest">{guide.title}</span>
                     </button>
@@ -889,10 +1018,53 @@ const App: React.FC = () => {
                   <Shield size={14} />
                   Privacy & Data Policy
                 </button>
+                <button 
+                  onClick={() => setActiveTab('setup')}
+                  className="w-full py-4 bg-blue-50 text-blue-600 rounded-3xl font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 border border-blue-100"
+                >
+                  <Download size={14} />
+                  Local Setup Guide
+                </button>
                 <button onClick={handleLogout} className="w-full py-5 bg-red-50 text-red-600 rounded-3xl font-black uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 border border-red-100">
                   <LogOut size={16} />
                   Sign Out
                 </button>
+              </div>
+
+              <div className="bg-white p-8 rounded-[40px] border-2 border-gray-50 space-y-4 shadow-sm">
+                <div className="flex items-center gap-3 mb-2">
+                  <History className="text-gray-400" size={20} />
+                  <h3 className="text-lg font-black text-gray-800">Usage Log</h3>
+                </div>
+                <div className="space-y-3 max-h-60 overflow-y-auto pr-2">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Total Actions: {currentUser.usageLogs?.length || 0}</p>
+                  {(currentUser.usageLogs || []).length === 0 ? (
+                    <p className="text-xs text-gray-400 italic">No activity logged yet.</p>
+                  ) : (
+                    currentUser.usageLogs?.map(log => (
+                      <div key={log.id} className="p-3 bg-gray-50 rounded-xl border border-gray-100">
+                        <p className="text-xs font-bold text-gray-700">{log.action}</p>
+                        <p className="text-[9px] text-gray-400 mt-1">{new Date(log.timestamp).toLocaleString()}</p>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div className="bg-blue-600 p-8 rounded-[40px] text-white shadow-xl space-y-4">
+                <div className="flex items-center gap-3">
+                  <Mail size={20} />
+                  <h3 className="font-black">Contact Administrator</h3>
+                </div>
+                <p className="text-xs opacity-90 leading-relaxed font-medium">
+                  Need help or have suggestions? Contact our administrator directly for support.
+                </p>
+                <a 
+                  href="mailto:peterpraise243@gmail.com"
+                  className="block w-full py-4 bg-white text-blue-600 rounded-2xl font-black text-center text-xs uppercase tracking-widest shadow-lg active:scale-95 transition-all"
+                >
+                  Email Admin
+                </a>
               </div>
             </>
           ) : (
@@ -907,9 +1079,9 @@ const App: React.FC = () => {
                 <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileChange} />
               </div>
               <div className="bg-white p-8 rounded-[40px] border-2 border-gray-100 space-y-5">
-                <EditInput label="Name" value={editData.fullName} onChange={(val) => setEditData({...editData, fullName: val})} />
-                <EditInput label="Phone" value={editData.phone} onChange={(val) => setEditData({...editData, phone: val})} />
-                <EditInput label="Challenges" value={editData.healthChallenges} onChange={(val) => setEditData({...editData, healthChallenges: val})} placeholder="e.g. Asthma, Allergies" />
+                <EditInput label="Name" value={editData.fullName || ''} onChange={(val) => setEditData({...editData, fullName: val})} />
+                <EditInput label="Phone" value={editData.phone || ''} onChange={(val) => setEditData({...editData, phone: val})} />
+                <EditInput label="Challenges" value={editData.healthChallenges || ''} onChange={(val) => setEditData({...editData, healthChallenges: val})} placeholder="e.g. Asthma, Allergies" />
               </div>
               <div className="flex gap-4">
                 <button onClick={() => setIsEditingProfile(false)} className="flex-1 py-5 bg-gray-100 text-gray-500 rounded-3xl font-black uppercase text-xs">Cancel</button>
@@ -924,6 +1096,61 @@ const App: React.FC = () => {
           onBack={() => setActiveTab('profile')} 
           onDeleteAccount={handleDeleteAccount} 
         />
+      )}
+      {activeTab === 'setup' && (
+        <div className="space-y-6 animate-fadeIn pb-20">
+          <div className="bg-white p-8 rounded-[40px] border-2 border-gray-50 shadow-sm space-y-6">
+            <div className="flex items-center gap-3 mb-2">
+              <Download className="text-blue-600" size={24} />
+              <h2 className="text-2xl font-black text-gray-800">Local Setup Guide</h2>
+            </div>
+            
+            <p className="text-sm text-gray-600 leading-relaxed">
+              Follow these steps to run RuralHealth Connect directly on your computer.
+            </p>
+
+            <div className="space-y-6">
+              <div className="space-y-2">
+                <h4 className="font-black text-sm text-gray-800 uppercase tracking-widest">1. Download Code</h4>
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  Click the ⚙️ <strong>Settings</strong> icon in the top-right of AI Studio, select <strong>Export</strong>, and choose <strong>Download as ZIP</strong>.
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <h4 className="font-black text-sm text-gray-800 uppercase tracking-widest">2. Install Node.js</h4>
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  Download and install Node.js from <a href="https://nodejs.org" target="_blank" className="text-blue-600 underline">nodejs.org</a>.
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <h4 className="font-black text-sm text-gray-800 uppercase tracking-widest">3. Run Commands</h4>
+                <div className="bg-gray-900 text-gray-100 p-4 rounded-2xl font-mono text-[10px] space-y-1">
+                  <p>npm install</p>
+                  <p>npm run dev</p>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <h4 className="font-black text-sm text-gray-800 uppercase tracking-widest">4. Set API Key</h4>
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  Create a <code>.env</code> file in the project folder and add your key:
+                </p>
+                <div className="bg-gray-900 text-gray-100 p-4 rounded-2xl font-mono text-[10px]">
+                  <p>GEMINI_API_KEY=your_key_here</p>
+                </div>
+              </div>
+            </div>
+
+            <button 
+              onClick={() => setActiveTab('profile')}
+              className="w-full py-5 bg-gray-100 text-gray-600 rounded-[32px] font-black text-xs uppercase tracking-widest"
+            >
+              Back to Profile
+            </button>
+          </div>
+        </div>
       )}
     </Layout>
   );

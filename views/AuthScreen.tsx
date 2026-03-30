@@ -101,8 +101,8 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
 
         {!isSignUp ? (
           <form onSubmit={handleSubmit} className="space-y-4">
-            <Input label="Email Address" name="email" type="email" value={signInData.email} onChange={handleSignInChange} placeholder="your@email.com" required />
-            <Input label="Password" name="password" type="password" value={signInData.password} onChange={handleSignInChange} placeholder="••••" required />
+            <Input label="Email Address" name="email" type="email" value={signInData.email || ''} onChange={handleSignInChange} placeholder="your@email.com" required />
+            <Input label="Password" name="password" type="password" value={signInData.password || ''} onChange={handleSignInChange} placeholder="••••" required />
             <button type="submit" className="w-full py-4 bg-red-600 text-white rounded-2xl font-bold shadow-lg hover:bg-red-700 active:scale-95 transition-all mt-4">
               SIGN IN
             </button>
@@ -123,12 +123,12 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
                 
                 <div className="space-y-3 mt-4">
                   {role === UserRole.ORGANIZATION ? (
-                    <Input label="Organization Name" name="organizationName" value={formData.organizationName} onChange={handleInputChange} placeholder="Name of Hospital/Clinic" required />
+                    <Input label="Organization Name" name="organizationName" value={formData.organizationName || ''} onChange={handleInputChange} placeholder="Name of Hospital/Clinic" required />
                   ) : (
-                    <Input label="Full Name" name="fullName" value={formData.fullName} onChange={handleInputChange} placeholder="Your Legal Name" required />
+                    <Input label="Full Name" name="fullName" value={formData.fullName || ''} onChange={handleInputChange} placeholder="Your Legal Name" required />
                   )}
-                  <Input label="Email Address" name="email" type="email" value={formData.email} onChange={handleInputChange} placeholder="email@provider.com" required />
-                  <Input label="Secure Password" name="password" type="password" value={formData.password} onChange={handleInputChange} placeholder="Create a password" required />
+                  <Input label="Email Address" name="email" type="email" value={formData.email || ''} onChange={handleInputChange} placeholder="email@provider.com" required />
+                  <Input label="Secure Password" name="password" type="password" value={formData.password || ''} onChange={handleInputChange} placeholder="Create a password" required />
                 </div>
                 <button onClick={handleNext} className="w-full py-4 bg-red-600 text-white rounded-2xl font-bold shadow-md">CONTINUE</button>
               </div>
@@ -138,20 +138,20 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
               <div className="space-y-4">
                 {role === UserRole.ORGANIZATION ? (
                   <>
-                    <Select label="Firm Type" name="firmType" value={formData.firmType} onChange={handleInputChange} options={['Clinic', 'Hospital', 'Pharmacy', 'Others']} />
+                    <Select label="Firm Type" name="firmType" value={formData.firmType || 'Clinic'} onChange={handleInputChange} options={['Clinic', 'Hospital', 'Pharmacy', 'Others']} />
                     {formData.firmType === 'Others' && (
-                      <Input label="Specify Type" name="otherFirmType" value={formData.otherFirmType} onChange={handleInputChange} placeholder="e.g. Wellness Center" />
+                      <Input label="Specify Type" name="otherFirmType" value={formData.otherFirmType || ''} onChange={handleInputChange} placeholder="e.g. Wellness Center" />
                     )}
                   </>
                 ) : (
                   <div className="grid grid-cols-2 gap-3">
-                    <Input label="Age" name="age" type="number" value={formData.age?.toString()} onChange={handleInputChange} />
-                    <Select label="Gender" name="gender" value={formData.gender} onChange={handleInputChange} options={['Male', 'Female', 'Other']} />
+                    <Input label="Age" name="age" type="number" value={formData.age?.toString() || ''} onChange={handleInputChange} />
+                    <Select label="Gender" name="gender" value={formData.gender || 'Male'} onChange={handleInputChange} options={['Male', 'Female', 'Other']} />
                   </div>
                 )}
                 
-                <Input label="Phone Number" name="phone" value={formData.phone} onChange={handleInputChange} placeholder="+234..." required />
-                <Input label="Address" name="address" value={formData.address} onChange={handleInputChange} placeholder="Physical Location" required />
+                <Input label="Phone Number" name="phone" value={formData.phone || ''} onChange={handleInputChange} placeholder="+234..." required />
+                <Input label="Address" name="address" value={formData.address || ''} onChange={handleInputChange} placeholder="Physical Location" required />
                 
                 <div className="flex gap-4 mt-6">
                   <button onClick={handleBack} className="flex-1 py-4 bg-gray-100 text-gray-500 rounded-2xl font-bold">BACK</button>
@@ -164,16 +164,18 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
               <div className="space-y-5">
                 {role !== UserRole.ORGANIZATION && (
                   <div className="grid grid-cols-2 gap-3">
-                    <Select label="Genotype" name="genotype" value={formData.genotype} onChange={handleInputChange} options={['AA', 'AS', 'SS', 'AC']} />
-                    <Select label="Blood Group" name="bloodGroup" value={formData.bloodGroup} onChange={handleInputChange} options={['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']} />
+                    <Select label="Genotype" name="genotype" value={formData.genotype || 'AA'} onChange={handleInputChange} options={['AA', 'AS', 'SS', 'AC']} />
+                    <Select label="Blood Group" name="bloodGroup" value={formData.bloodGroup || 'O+'} onChange={handleInputChange} options={['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']} />
                   </div>
                 )}
 
-                {(role === UserRole.ORGANIZATION || role === UserRole.CAREGIVER) && (
+                {(role === UserRole.ORGANIZATION || role === UserRole.CAREGIVER || role === UserRole.PATIENT) && (
                   <div className="bg-gray-50 p-4 rounded-2xl border border-gray-100">
                     <p className="text-[10px] font-bold text-gray-400 uppercase mb-3">Community Visibility</p>
                     <div className="space-y-3">
-                      <p className="text-xs text-gray-600 leading-tight">Appear in the Help section for nearby patients?</p>
+                      <p className="text-xs text-gray-600 leading-tight">
+                        {role === UserRole.PATIENT ? 'Allow providers to find you to offer help?' : 'Appear in the Help section for nearby patients?'}
+                      </p>
                       <div className="flex gap-4">
                         <label className="flex items-center gap-2 cursor-pointer">
                           <input type="radio" name="showInHelp" value="true" checked={formData.showInHelp === true} onChange={handleInputChange} className="accent-red-600" />
@@ -188,7 +190,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
                   </div>
                 )}
 
-                <Select label="Language" name="preferredLanguage" value={formData.preferredLanguage} onChange={handleInputChange} options={Object.values(Language)} />
+                <Select label="Language" name="preferredLanguage" value={formData.preferredLanguage || Language.ENGLISH} onChange={handleInputChange} options={Object.values(Language)} />
                 
                 <div className="flex gap-4 mt-6">
                   <button onClick={handleBack} className="flex-1 py-4 bg-gray-100 text-gray-500 rounded-2xl font-bold">BACK</button>
